@@ -1,0 +1,355 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: broker
+    description: Safe broker-bridge status operations
+  - name: analysis
+    description: Analysis-only service operations
+  - name: market-data
+    description: Authenticated read-only MT5 demo market data
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /broker/status:
+    get:
+      operationId: getBrokerStatus
+      tags: [broker]
+      summary: Return the safe broker bridge status
+      description: Returns DEMO, disconnected, analysis-only bridge status.
+      responses:
+        "200":
+          description: Current safe broker bridge status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrokerStatus"
+  /market-data/mt5-demo:
+    post:
+      operationId: ingestMt5DemoMarketData
+      tags: [market-data]
+      summary: Ingest authenticated XAUUSDm demo market data
+      description: >
+        Accepts only a signed quote and exactly 100 M5 OHLCV candles. Requires
+        HTTPS, X-Bridge-Timestamp, X-Bridge-Signature, and the server-side
+        MT5_MARKET_DATA_BRIDGE_SECRET. The signature is HMAC-SHA256 over
+        "<timestamp>.<exact request body bytes>". This endpoint cannot access
+        account data or execute orders.
+      security:
+        - BridgeTimestamp: []
+          BridgeSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Mt5DemoMarketDataInput"
+      responses:
+        "202":
+          description: Authenticated market data accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketDataIngestionResponse"
+        "400":
+          description: Malformed JSON, missing headers, or insecure transport
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceError"
+        "401":
+          description: Invalid signature, expired timestamp, or replay
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceError"
+        "422":
+          description: Payload validation failed or supplied market data is stale
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceError"
+        "503":
+          description: Bridge secret is not configured on the server
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceError"
+  /analysis/service:
+    get:
+      operationId: getAnalysisServiceStatus
+      tags: [analysis]
+      summary: Get analysis service status
+      description: Returns analysis-service state and the latest analysis snapshot.
+      responses:
+        "200":
+          description: Current analysis service status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisServiceStatus"
+  /analysis/service/start:
+    post:
+      operationId: startAnalysisService
+      tags: [analysis]
+      summary: Start analysis-only processing
+      description: Starts the analysis worker only; it cannot access broker orders.
+      responses:
+        "200":
+          description: Analysis service status after the start request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisServiceStatus"
+        "503":
+          description: Python analysis worker could not be started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceError"
+  /analysis/service/stop:
+    post:
+      operationId: stopAnalysisService
+      tags: [analysis]
+      summary: Stop analysis-only processing
+      description: Stops analysis processing; it does not interact with brokers.
+      responses:
+        "200":
+          description: Analysis service status after the stop request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisServiceStatus"
+components:
+  securitySchemes:
+    BridgeTimestamp:
+      type: apiKey
+      in: header
+      name: X-Bridge-Timestamp
+    BridgeSignature:
+      type: apiKey
+      in: header
+      name: X-Bridge-Signature
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+    BrokerStatus:
+      type: object
+      properties:
+        accountMode:
+          type: string
+          enum: [DEMO, LIVE]
+        connectionStatus:
+          type: string
+          enum: [NOT_CONNECTED, CONNECTED, ERROR]
+        bridgeConfigured:
+          type: boolean
+        symbol:
+          type: string
+        bid:
+          type: number
+          nullable: true
+        ask:
+          type: number
+          nullable: true
+        spread:
+          type: number
+          nullable: true
+        timestamp:
+          type: string
+          nullable: true
+        dataOrigin:
+          type: string
+          enum: [REAL, SIMULATED]
+        marketDataReadOnly:
+          type: boolean
+        demoExecutionEnabled:
+          type: boolean
+        liveModeEnabled:
+          type: boolean
+        orderExecutionAllowed:
+          type: boolean
+        message:
+          type: string
+      required:
+        - accountMode
+        - connectionStatus
+        - bridgeConfigured
+        - symbol
+        - bid
+        - ask
+        - spread
+        - timestamp
+        - dataOrigin
+        - marketDataReadOnly
+        - demoExecutionEnabled
+        - liveModeEnabled
+        - orderExecutionAllowed
+        - message
+    Mt5DemoCandle:
+      type: object
+      additionalProperties: false
+      properties:
+        time:
+          type: string
+          format: date-time
+        open:
+          type: number
+          exclusiveMinimum: 0
+        high:
+          type: number
+          exclusiveMinimum: 0
+        low:
+          type: number
+          exclusiveMinimum: 0
+        close:
+          type: number
+          exclusiveMinimum: 0
+        volume:
+          type: number
+          minimum: 0
+      required: [time, open, high, low, close, volume]
+    Mt5DemoMarketDataInput:
+      type: object
+      additionalProperties: false
+      properties:
+        symbol:
+          type: string
+          enum: [XAUUSDm]
+        timestamp:
+          type: string
+          format: date-time
+        bid:
+          type: number
+          exclusiveMinimum: 0
+        ask:
+          type: number
+          exclusiveMinimum: 0
+        candles:
+          type: array
+          minItems: 100
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/Mt5DemoCandle"
+      required: [symbol, timestamp, bid, ask, candles]
+    MarketDataIngestionResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        accepted:
+          type: boolean
+          enum: [true]
+        symbol:
+          type: string
+          enum: [XAUUSDm]
+        receivedAt:
+          type: string
+          format: date-time
+        quoteTimestamp:
+          type: string
+          format: date-time
+        candleCount:
+          type: integer
+          enum: [100]
+        dataOrigin:
+          type: string
+          enum: [REAL]
+      required: [accepted, symbol, receivedAt, quoteTimestamp, candleCount, dataOrigin]
+    AnalysisServiceStatus:
+      type: object
+      properties:
+        state:
+          type: string
+          enum: [STOPPED, STARTING, RUNNING, STOPPING, ERROR]
+        running:
+          type: boolean
+        startedAt:
+          type: ["string", "null"]
+        updatedAt:
+          type: ["string", "null"]
+        analysis:
+          oneOf:
+            - $ref: "#/components/schemas/AnalysisSnapshot"
+            - type: "null"
+        error:
+          type: ["string", "null"]
+        orderStatus:
+          type: string
+          enum: [DISABLED]
+      required:
+        - state
+        - running
+        - startedAt
+        - updatedAt
+        - analysis
+        - error
+        - orderStatus
+    AnalysisSnapshot:
+      type: object
+      properties:
+        symbol:
+          type: string
+        signal:
+          type: string
+          enum: [BUY, SELL, WAIT]
+        trend:
+          type: string
+        momentum:
+          type: string
+        confidence:
+          type: number
+        breakout:
+          type: string
+        timestamp:
+          type: string
+        source:
+          type: string
+        candleCount:
+          type: integer
+        reasons:
+          type: array
+          items:
+            type: string
+      required:
+        - symbol
+        - signal
+        - trend
+        - momentum
+        - confidence
+        - breakout
+        - timestamp
+        - source
+        - candleCount
+        - reasons
+    ServiceError:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
